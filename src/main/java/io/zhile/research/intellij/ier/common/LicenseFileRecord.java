@@ -3,7 +3,11 @@ package io.zhile.research.intellij.ier.common;
 import com.intellij.openapi.util.io.FileUtil;
 import io.zhile.research.intellij.ier.helper.DateTime;
 
-import java.io.*;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.util.Date;
 
 public class LicenseFileRecord implements EvalRecord {
@@ -22,15 +26,18 @@ public class LicenseFileRecord implements EvalRecord {
         }
     }
 
+    public static void touch(File file) throws Exception {
+        try (DataOutputStream dos = new DataOutputStream(new FileOutputStream(file))) {
+            dos.writeLong(~System.currentTimeMillis());
+        }
+    }
+
     @Override
     public void reset() throws Exception {
         if (!FileUtil.delete(file)) {
             throw new Exception("Remove " + type + " failed: " + file.getAbsolutePath());
         }
-
-        try (DataOutputStream dos = new DataOutputStream(new FileOutputStream(file))) {
-            dos.writeLong(~System.currentTimeMillis());
-        }
+        touch(this.file);
     }
 
     @Override

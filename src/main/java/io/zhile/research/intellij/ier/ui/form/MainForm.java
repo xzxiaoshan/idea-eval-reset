@@ -13,92 +13,87 @@ import io.zhile.research.intellij.ier.helper.ResetTimeHelper;
 
 import javax.swing.*;
 import java.awt.*;
-import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.util.List;
 
-public class MainForm implements Disposable {
+public class MainForm {
     private JPanel rootPanel;
     private JButton btnReset;
-    private JList lstMain;
+    private JList<String> lstMain;
     private JLabel lblLastResetTime;
     private JButton btnReload;
     private JLabel lblFound;
     private JLabel lblLastResetTimeLabel;
     private JCheckBox chkResetAuto;
     private JLabel lblVersion;
+    private JCheckBox chkAutoLogout;
+    private DialogWrapper dialogWrapper;
+    private DefaultListModel<String> listModel;
 
-    private final DialogWrapper dialogWrapper;
-    private final DefaultListModel<String> listModel = new DefaultListModel<>();
-
-    public MainForm(DialogWrapper dialogWrapper) {
-        this.dialogWrapper = dialogWrapper;
-        if (dialogWrapper != null) {
-            Disposer.register(dialogWrapper.getDisposable(), this);
-        }
+    public MainForm(Disposable disposable) {
+        this(disposable, null);
     }
 
-    public JPanel getContent() {
+    public MainForm(Disposable disposable, DialogWrapper wrapper) {
+        this.listModel = new DefaultListModel<>();
+        this.dialogWrapper = wrapper;
+        Disposer.register(disposable, () -> {
+            rootPanel.removeAll();
+            listModel = null;
+            dialogWrapper = null;
+        });
+    }
+
+    public JPanel getContent(Disposable disposable) {
+        Disposer.register(disposable, () -> rootPanel.removeAll());
         boldFont(lblFound);
         boldFont(lblLastResetTimeLabel);
         reloadLastResetTime();
 
         lblVersion.setText("v" + PluginHelper.getPluginVersion());
+        this.chkAutoLogout.setSelected(Resetter.isAutoLogout());
+        addActionEventListener(this.chkAutoLogout, e -> Resetter.setAutoLogout(chkAutoLogout.isSelected()), disposable);
 
         chkResetAuto.setSelected(Resetter.isAutoReset());
-        chkResetAuto.addActionListener(new AbstractAction() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                Resetter.setAutoReset(chkResetAuto.isSelected());
-            }
-        });
+        addActionEventListener(this.chkResetAuto, e -> Resetter.setAutoReset(chkResetAuto.isSelected()), disposable);
 
         lstMain.setModel(listModel);
         reloadRecordItems();
 
         btnReload.setIcon(AllIcons.Actions.Refresh);
-        btnReload.addActionListener(new AbstractAction() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                reloadLastResetTime();
-                reloadRecordItems();
-            }
-        });
+        addActionEventListener(this.btnReload, e -> {
+            reloadLastResetTime();
+            reloadRecordItems();
+        }, disposable);
 
         btnReset.setIcon(AllIcons.General.Reset);
-        btnReset.addActionListener(new AbstractAction() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                resetEvalItems();
-            }
-        });
+        addActionEventListener(this.btnReset, e -> resetEvalItems(), disposable);
 
         if (null != dialogWrapper) {
             dialogWrapper.getRootPane().setDefaultButton(btnReset);
+            this.rootPanel.setMinimumSize(new Dimension(640, 260));
         }
-
-        rootPanel.setMinimumSize(new Dimension(600, 240));
         return rootPanel;
     }
 
-    private void reloadLastResetTime() {
+    public void reloadLastResetTime() {
         lblLastResetTime.setText(ResetTimeHelper.getLastResetTimeStr());
     }
 
-    private void reloadRecordItems() {
+    public void reloadRecordItems() {
         listModel.clear();
-
+        Resetter.touchLicenses();
         List<EvalRecord> recordItemList = Resetter.getEvalRecords();
         for (EvalRecord record : recordItemList) {
             listModel.addElement(record.toString());
         }
     }
 
-    private void resetEvalItems() {
+    public void resetEvalItems() {
         if (Messages.YES != Messages.showYesNoDialog("Your IDE will restart after reset!\nAre your sure to reset?", PluginHelper.getPluginName(), AllIcons.General.Reset)) {
             return;
         }
-
+        Resetter.touchLicenses();
         Resetter.reset(Resetter.getEvalRecords());
         ResetTimeHelper.resetLastResetTime();
         listModel.clear();
@@ -115,14 +110,9 @@ public class MainForm implements Disposable {
         component.setFont(font.deriveFont(font.getStyle() | Font.BOLD));
     }
 
-    @Override
-    public void dispose() {
-        for (AbstractButton button : new AbstractButton[]{chkResetAuto, btnReload, btnReset}) {
-            for (ActionListener listener : button.getActionListeners()) {
-                button.removeActionListener(listener);
-            }
-        }
-
-        rootPanel.removeAll();
+    private static void addActionEventListener(AbstractButton button, ActionListener listener, Disposable disposable) {
+        button.addActionListener(listener);
+        Disposer.register(disposable, () -> button.removeActionListener(listener));
     }
+
 }

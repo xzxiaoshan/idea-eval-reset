@@ -7,9 +7,12 @@ import com.intellij.ide.util.PropertiesComponent;
 import com.intellij.ide.util.PropertiesComponentImpl;
 import com.intellij.openapi.application.PathManager;
 import com.intellij.openapi.util.SystemInfo;
+import io.zhile.research.intellij.ier.helper.AppHelper;
 import io.zhile.research.intellij.ier.helper.Constants;
+import io.zhile.research.intellij.ier.helper.DateTime;
 import io.zhile.research.intellij.ier.helper.NotificationHelper;
 import io.zhile.research.intellij.ier.helper.ReflectionHelper;
+import io.zhile.research.intellij.ier.plugins.MyBatisCodeHelper;
 import org.jdom.Attribute;
 import org.jdom.Element;
 
@@ -17,17 +20,22 @@ import java.io.File;
 import java.lang.reflect.Method;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.prefs.BackingStoreException;
 import java.util.prefs.Preferences;
 
 public class Resetter {
     private static final String DEFAULT_VENDOR = "jetbrains";
     private static final String OLD_MACHINE_ID_KEY = "JetBrains.UserIdOnMachine";
-    private static final String NEW_MACHINE_ID_KEY = DEFAULT_VENDOR + ".user_id_on_machine";
-    private static final String DEVICE_ID_KEY = DEFAULT_VENDOR + ".device_id";
     private static final String EVAL_KEY = "evlsprt";
-    private static final String AUTO_RESET_KEY = Constants.PLUGIN_PREFS_PREFIX + ".auto_reset." + Constants.IDE_NAME_LOWER + "." + Constants.IDE_HASH;
+    private static final String AUTO_LOGOUT_KEY = Constants.PLUGIN_PREFS_PREFIX + ".auto_logout";
+    private static final String AUTO_RESET_KEY = Constants.PLUGIN_PREFS_PREFIX + ".auto_reset." + Constants.IDE_NAME_LOWER;
+    private static final Method METHOD_GET_PRODUCT_CODE = ReflectionHelper.getMethod(IdeaPluginDescriptor.class, "getProductCode");
+    private static final Method METHOD_GET_RELEASE_DATE = ReflectionHelper.getMethod(IdeaPluginDescriptor.class, "getReleaseDate");
+    private static final Set<String> LICENSE_FILES = new TreeSet<>();
 
     public static List<EvalRecord> getEvalRecords() {
         List<EvalRecord> list = new ArrayList<>();
@@ -90,11 +98,20 @@ public class Resetter {
             }
         }
 
+        KeepCondition keepCondition = () -> !Resetter.isAutoLogout();
         PreferenceRecord[] prefsValue = new PreferenceRecord[]{
                 new PreferenceRecord(OLD_MACHINE_ID_KEY, true),
-                new PreferenceRecord(NEW_MACHINE_ID_KEY),
-                new PreferenceRecord(DEVICE_ID_KEY),
-        };
+                new PreferenceRecord("jetbrains.user_id_on_machine"),
+                new PreferenceRecord("jetbrains.device_id"),
+                new PreferenceRecord("jetbrains.marketplacedownloads_device_id"),
+                new PreferenceRecord("jetbrains.mlse_device_id"),
+                new PreferenceRecord("jetbrains.auth-tokens.account_jetbrains_com"),
+                new PreferenceRecord("jetbrains.feature_usage_event_log_salt"),
+                new PreferenceRecord("jetbrains.mlse_feature_usage_event_log_salt"),
+                new PreferenceRecord("jetbrains.jetprofile.idtoken"),
+                new PreferenceRecord("jetbrains.jetprofile.userid", false, keepCondition),
+                new PreferenceRecord("jetbrains.jetprofile.userlogin", false, keepCondition)};
+
         for (PreferenceRecord record : prefsValue) {
             if (record.getValue() == null) {
                 continue;
@@ -113,10 +130,9 @@ public class Resetter {
                 getAllPrefsKeys(Preferences.userRoot().node(DEFAULT_VENDOR + "/" + name + "/" + Constants.IDE_HASH), prefsList);
             }
 
-            Method methodGetProductCode = ReflectionHelper.getMethod(IdeaPluginDescriptor.class, "getProductCode");
-            if (null != methodGetProductCode) {
+            if (null != METHOD_GET_PRODUCT_CODE) {
                 for (IdeaPluginDescriptor descriptor : PluginManager.getPlugins()) {
-                    String productCode = (String) methodGetProductCode.invoke(descriptor);
+                    String productCode = (String) METHOD_GET_PRODUCT_CODE.invoke(descriptor);
                     if (null == productCode || productCode.isEmpty()) {
                         continue;
                     }
@@ -149,7 +165,49 @@ public class Resetter {
             }
         }
 
+        new MyBatisCodeHelper().test(list);
         return list;
+    }
+
+    public static void touchLicenses() {
+        IdeaPluginDescriptor[] plugins;
+        try {
+            if (null == METHOD_GET_PRODUCT_CODE || null == METHOD_GET_RELEASE_DATE) {
+                return;
+            }
+            File evalDir = getEvalDir();
+            if (!evalDir.exists()) {
+                evalDir.mkdirs();
+            }
+            LICENSE_FILES.add(String.format("%s%s.evaluation.key", AppHelper.getProductName(), Integer.valueOf(Constants.IDE_BASELINE_VERSION)));
+            for (IdeaPluginDescriptor descriptor : PluginManager.getPlugins()) {
+                addPluginLicense(descriptor);
+            }
+            for (String fileName : LICENSE_FILES) {
+                File licenseFile = new File(evalDir, fileName);
+                if (!licenseFile.exists()) {
+                    LicenseFileRecord.touch(licenseFile);
+                }
+            }
+        } catch (Exception e) {
+            NotificationHelper.showError(null, "Touch eval license failed!");
+        }
+    }
+
+    public static void addPluginLicense(IdeaPluginDescriptor descriptor) {
+        if (null == METHOD_GET_PRODUCT_CODE || null == METHOD_GET_RELEASE_DATE) {
+            return;
+        }
+        try {
+            String productCode = (String) METHOD_GET_PRODUCT_CODE.invoke(descriptor);
+            Date releaseDate = (Date) METHOD_GET_RELEASE_DATE.invoke(descriptor);
+            if (null == productCode || productCode.isEmpty() || null == releaseDate) {
+                return;
+            }
+            LICENSE_FILES.add(String.format("plg_%s_%s.evaluation.key", productCode, DateTime.getPluginReleaseDateStr(releaseDate)));
+        } catch (Exception e) {
+            NotificationHelper.showError(null, "Add plugin eval license failed!");
+        }
     }
 
     public static void reset(List<EvalRecord> records) {
@@ -170,8 +228,18 @@ public class Resetter {
         return Prefs.getBoolean(AUTO_RESET_KEY, false);
     }
 
+
     public static void setAutoReset(boolean isAutoReset) {
         Prefs.putBoolean(AUTO_RESET_KEY, isAutoReset);
+        syncPrefs();
+    }
+
+    public static boolean isAutoLogout() {
+        return Prefs.getBoolean(AUTO_LOGOUT_KEY, false);
+    }
+
+    public static void setAutoLogout(boolean isAutoClear) {
+        Prefs.putBoolean(AUTO_LOGOUT_KEY, isAutoClear);
         syncPrefs();
     }
 

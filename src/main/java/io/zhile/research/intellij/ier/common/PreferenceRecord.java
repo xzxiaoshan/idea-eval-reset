@@ -11,14 +11,20 @@ public class PreferenceRecord implements EvalRecord {
     private final String key;
     private final String value;
     private final boolean isRaw;
+    private final KeepCondition keepCondition;
 
     public PreferenceRecord(String key) {
-        this(key, false);
+        this(key, false, null);
     }
 
     public PreferenceRecord(String key, boolean isRaw) {
+        this(key, isRaw, null);
+    }
+
+    public PreferenceRecord(String key, boolean isRaw, KeepCondition keepCondition) {
         this.key = key;
         this.isRaw = isRaw;
+        this.keepCondition = keepCondition;
         this.value = isRaw ? Preferences.userRoot().get(key, DEFAULT_VALUE) : Prefs.get(key, DEFAULT_VALUE);
     }
 
@@ -32,6 +38,9 @@ public class PreferenceRecord implements EvalRecord {
 
     @Override
     public void reset() throws Exception {
+        if (null != this.keepCondition && this.keepCondition.needKeep()) {
+            return;
+        }
         if (isRaw) {
             Preferences.userRoot().remove(key);
         } else {
@@ -43,6 +52,7 @@ public class PreferenceRecord implements EvalRecord {
 
     @Override
     public String toString() {
-        return type + ": " + key + " = " + (null == value ? "" : value);
+        String v = null == this.value ? "" : this.value;
+        return type + ": " + this.key + " = " + v.substring(0, Math.min(36, v.length()));
     }
 }
